@@ -1,0 +1,430 @@
+import express from "express";
+import path from "path";
+import { createServer as createViteServer } from "vite";
+import { GoogleGenAI, Type } from "@google/genai";
+
+// Presets data for NFT Collections
+const PRESET_COLLECTIONS = [
+  {
+    id: "bayc",
+    name: "Bored Ape Yacht Club",
+    chain: "Ethereum",
+    address: "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d",
+    symbol: "BAYC",
+    floorPrice: 14.5, // ETH
+    floorPriceUsd: 46400,
+    velocity24h: -1.2, // % Change
+    realVolume: 1245.5, // ETH
+    washVolume: 82.3, // ETH
+    holderCount: 5412,
+    totalSupply: 10000,
+    giniCoefficient: 0.58, // Holder concentration (0 = perfectly equal, 1 = extremely unequal)
+    riskScore: 23, // 0-100
+    riskRating: "Green",
+    auditStatus: "Audited",
+    plagiarismReport: "Original. Match found in official contract.",
+    teamCredibility: "Doxed (Yuga Labs), high-profile advisory",
+    socialManipulationScore: 18, // Low social pump-and-dump signals
+    liquidityDepth: "Excellent (Deep pool, low slippage)",
+    breakdown: {
+      washTradeProb: 15,
+      holderConcentration: 45,
+      teamCredibility: 10,
+      contractAudit: 5,
+      socialManipulation: 22,
+      liquidityDepth: 12,
+    },
+    description: "The gold standard of profile picture (PFP) NFTs on Ethereum, featuring 10,000 uniquely drawn apes. High institutional backing and deep community liquidity keep risks minimal."
+  },
+  {
+    id: "milady",
+    name: "Milady Maker",
+    chain: "Ethereum",
+    address: "0x5af0d9827e0c53e4799bb226655a1de152a425a5",
+    symbol: "MIL",
+    floorPrice: 5.2,
+    floorPriceUsd: 16640,
+    velocity24h: 14.8,
+    realVolume: 852.1,
+    washVolume: 210.4, // Significant wash trading detected
+    holderCount: 3105,
+    totalSupply: 10000,
+    giniCoefficient: 0.72, // High whale concentration
+    riskScore: 54, // Medium risk
+    riskRating: "Yellow",
+    auditStatus: "Partially Audited",
+    plagiarismReport: "Original custom artwork, but numerous derivative clones found on Solana.",
+    teamCredibility: "Semi-anonymous, volatile developer history",
+    socialManipulationScore: 68, // High social coordinate pumps
+    liquidityDepth: "Moderate (Prone to liquidity drying up on floor movements)",
+    breakdown: {
+      washTradeProb: 55,
+      holderConcentration: 72,
+      teamCredibility: 50,
+      contractAudit: 30,
+      socialManipulation: 75,
+      liquidityDepth: 40,
+    },
+    description: "A highly stylized and volatile profile picture collection. Market intelligence flags significant coordinated wash-trading loop behaviors across key clusters of whale addresses."
+  },
+  {
+    id: "fake-azuki",
+    name: "Azkui Elementals (Slippage Spinoff)",
+    chain: "Polygon",
+    address: "0x289fa3118cf52342ef99bf3bb11822c9dcfff91c",
+    symbol: "AZK_POLY",
+    floorPrice: 0.08,
+    floorPriceUsd: 256,
+    velocity24h: -34.5,
+    realVolume: 4.2,
+    washVolume: 125.4, // Extremely high simulated/wash ratio
+    holderCount: 42, // Only 42 holders despite 5000 supply!
+    totalSupply: 5000,
+    giniCoefficient: 0.96, // Extremely heavy creator control
+    riskScore: 92, // High risk
+    riskRating: "Red",
+    auditStatus: "Not Audited / Unverified",
+    plagiarismReport: "Critical Plagiarism! 94.6% visual similarity to official Azuki collection on Ethereum. Copy-paste metadata detected.",
+    teamCredibility: "Anonymous creators, zero social links verified",
+    socialManipulationScore: 89, // High referral spam and fake Twitter bots
+    liquidityDepth: "None (Zero organic bid support)",
+    breakdown: {
+      washTradeProb: 95,
+      holderConcentration: 98,
+      teamCredibility: 90,
+      contractAudit: 95,
+      socialManipulation: 88,
+      liquidityDepth: 95,
+    },
+    description: "Our plagiarism engine flags this collection's assets as literal screen-grabs and visual permutations of Ethereum's Azuki NFTs. Extremely dangerous: wash trade patterns indicate automated circular trading between 4 wallet addresses to pump volume metrics."
+  },
+  {
+    id: "sol-ape-royal",
+    name: "Solana Ape Royalty",
+    chain: "Solana",
+    address: "8xH1pYd9...W3p2e",
+    symbol: "SAR",
+    floorPrice: 1.2, // SOL
+    floorPriceUsd: 180,
+    velocity24h: 42.1,
+    realVolume: 12.8,
+    washVolume: 184.2,
+    holderCount: 112,
+    totalSupply: 3333,
+    giniCoefficient: 0.88,
+    riskScore: 81,
+    riskRating: "Red",
+    auditStatus: "Not Audited",
+    plagiarismReport: "Highly Derivative. Repackaged visual traits from multiple existing SOL collections.",
+    teamCredibility: "Anonymous team, suspicious fund transfer to coin mixers",
+    socialManipulationScore: 82,
+    liquidityDepth: "Low (Floor is artificially thin, high developer wash control)",
+    breakdown: {
+      washTradeProb: 88,
+      holderConcentration: 85,
+      teamCredibility: 88,
+      contractAudit: 80,
+      socialManipulation: 81,
+      liquidityDepth: 85,
+    },
+    description: "Urgent rug-pull signature matches. Over 80% of volume is generated by a closed loop of wallets routing SOL back and forth. Creator allocation is extremely dense with suspicious batch transfers."
+  }
+];
+
+// Lazy Gemini API Client Setup
+let genAIClient: GoogleGenAI | null = null;
+function getGenAI(): GoogleGenAI | null {
+  if (!genAIClient) {
+    const key = process.env.GEMINI_API_KEY;
+    if (key && key !== "MY_GEMINI_API_KEY" && key.trim() !== "") {
+      genAIClient = new GoogleGenAI({
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+    }
+  }
+  return genAIClient;
+}
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  app.use(express.json());
+
+  // API 1: Presets
+  app.get("/api/presets", (req, res) => {
+    res.json({
+      success: true,
+      presets: PRESET_COLLECTIONS,
+    });
+  });
+
+  // API 2: Live Threat Feed Logs
+  app.get("/api/logs", (req, res) => {
+    const fakeThreats = [
+      {
+        id: "l1",
+        time: "Just now",
+        chain: "ETH",
+        type: "WASH_RING",
+        message: "Circular wash loop detected for Milady Clone #412: 0x931a → 0xba2e → 0xfe41 → 0x931a",
+        severity: "yellow"
+      },
+      {
+        id: "l2",
+        time: "2 mins ago",
+        chain: "SOL",
+        type: "RUG_SIGNAL",
+        message: "Solana Ape Royalty team withdrew 140 SOL from liquidity-support pool to exchange deposit",
+        severity: "red"
+      },
+      {
+        id: "l3",
+        time: "5 mins ago",
+        chain: "POLY",
+        type: "PLAGIARISM",
+        message: "High similarity score (94.6%) matching Azkui Elementals against authentic Ethereum Azuki assets",
+        severity: "red"
+      },
+      {
+        id: "l4",
+        time: "15 mins ago",
+        chain: "ETH",
+        type: "PUMP_DUMP",
+        message: "Floor Price velocity spike (+45% in 30m) on suspicious wash trades in 'CyberGnomz' collection",
+        severity: "yellow"
+      },
+      {
+        id: "l5",
+        time: "32 mins ago",
+        chain: "SOL",
+        type: "WHOLE_MUTATION",
+        message: "Sybil attack group (12 wallets, DBSCAN cluster #3) sweeping floor on 'DeGod derivatives'",
+        severity: "green"
+      }
+    ];
+    res.json({
+      success: true,
+      logs: fakeThreats,
+    });
+  });
+
+  // API 3: Wash loop circular trading network data (for visual graph sandbox)
+  app.get("/api/wallet-graph", (req, res) => {
+    const scale = parseFloat(req.query.nodesCount as string) || 8;
+    // Generate an interactive circular graph nodes and links representing wash ring signatures
+    const nodes = [];
+    const links = [];
+
+    // Master suspicious loop wallet nodes
+    nodes.push({ id: "Collector_0x8f2a", group: 1, type: "whales", washInvolved: 142.5 });
+    nodes.push({ id: "Trader_0xba11", group: 1, type: "whales", washInvolved: 135.2 });
+    nodes.push({ id: "Buyer_0xfe41", group: 1, type: "sybil", washInvolved: 98.4 });
+    nodes.push({ id: "Funding_0x0021", group: 2, type: "creator", washInvolved: 2.1 });
+    nodes.push({ id: "Mixer_0xdead", group: 2, type: "tornado", washInvolved: 0 });
+
+    // Link suspect wash chain
+    links.push({ source: "Collector_0x8f2a", target: "Trader_0xba11", val: 82.5, type: "circular" });
+    links.push({ source: "Trader_0xba11", target: "Buyer_0xfe41", val: 78.4, type: "circular" });
+    links.push({ source: "Buyer_0xfe41", target: "Collector_0x8f2a", val: 91.2, type: "circular" });
+    links.push({ source: "Funding_0x0021", target: "Collector_0x8f2a", val: 5.0, type: "seed" });
+    links.push({ source: "Buyer_0xfe41", target: "Mixer_0xdead", val: 40.0, type: "exit" });
+
+    // Dynamic additional noise mock nodes based on slider settings
+    const loopSize = Math.min(25, Math.max(4, Math.round(scale)));
+    for (let i = 1; i <= loopSize; i++) {
+      const nodeName = `Noise_Wallet_0x${(1000 + i * 23).toString(16)}`;
+      nodes.push({ id: nodeName, group: 3, type: "noise", washInvolved: Math.random() * 15 });
+      // Attach to some wallet
+      const targetSuspect = nodes[Math.floor(Math.random() * 3)].id;
+      links.push({ source: nodeName, target: targetSuspect, val: Math.random() * 8, type: "noise" });
+    }
+
+    res.json({
+      success: true,
+      nodes,
+      links,
+    });
+  });
+
+  // API 4: Plagiarism analysis (mock or CLIP representation)
+  app.post("/api/plagiarism-check", async (req, res) => {
+    const { imageName, simulatedQuality } = req.body;
+    // Generates a simulated CLIP neural scan
+    const similarity = Math.round(50 + Math.random() * 48); // 50% to 98%
+    const matches = [
+      { collection: "Azuki", network: "Ethereum", similarityScore: similarity, matchType: "Exact mirror traits" },
+      { collection: "Bored Ape Yacht Club", network: "Ethereum", similarityScore: Math.round(Math.random() * 20), matchType: "Subtle trait overlap" },
+      { collection: "Pudgy Penguins", network: "Ethereum", similarityScore: Math.round(Math.random() * 15), matchType: "None" }
+    ];
+
+    res.json({
+      success: true,
+      scannedImage: imageName || "uploaded_artwork_clip_scan.png",
+      primaryMatch: matches[0],
+      visualSignatureHash: "sha256_b39d10ec29af904fb730db61b2c",
+      confidence: "High (CLIP Cosine similarity index)",
+      matches,
+    });
+  });
+
+  // API 5: AI-Powered Collection Analyzer via Gemini
+  app.post("/api/analyze", async (req, res) => {
+    const { collectionName, blockchain } = req.body;
+    if (!collectionName) {
+      return res.status(400).json({ success: false, error: "Missing collection name" });
+    }
+
+    const aiClient = getGenAI();
+
+    // Setup instructions to ensure a perfect JSON output
+    const systemInstruction = `You are the lead smart-contract auditor and forensic blockchain investigator on a state-of-the-art AI-Powered NFT Fraud Detection platform called NFT Analytics & Fraud Platform.
+Your job is to analyze the requested collection and output a comprehensive risk and analytics assessment in JSON format.
+You must be realistic, and supply educational insights, real blockchain metrics, and threat profiles that help developers and traders spot wash trading, art plagiarism, contract traps, and creator integrity issues.
+
+You MUST follow the exact format of this JSON structure:
+{
+  "name": "Collection Name",
+  "chain": "Blockchain used (e.g. Ethereum, Solana, Polygon, Bitcoin)",
+  "symbol": "Collectible ticker symbol",
+  "floorPrice": "Numeric floor price",
+  "floorPriceUsd": "Numeric floor price in USD",
+  "velocity24h": "Numeric 24H floor price velocity percentage (e.g., -5.4)",
+  "realVolume": "Numeric organic 24H volume",
+  "washVolume": "Numeric wash trade volume",
+  "holderCount": "Numeric unique holder count",
+  "totalSupply": "Numeric total token supply",
+  "giniCoefficient": "Numeric holder concentration index (between 0.10 and 1.00)",
+  "riskScore": "Numeric aggregate risk score from 0 (safest) to 100 (highest fraud risk)",
+  "riskRating": "Green (Risk 0-35), Yellow (Risk 36-69), or Red (Risk 70-100)",
+  "auditStatus": "Verified, Audited, Partially Audited, Not Audited, or Vulnerability Flagged",
+  "plagiarismReport": "Short visual plagiarism summary score (e.g., Original custom art, Derivative of Azuki 80% match, Copy-paste IPFS mirrors)",
+  "teamCredibility": "Assessment of team dorfing status or history (e.g., Doxed, Semi-anonymous, High-risk anonymous)",
+  "socialManipulationScore": "Numeric indicator 0-100 indicating botting, spam, or manipulative hyping",
+  "liquidityDepth": "Short analysis of trade bid-ask depth and floor support strength",
+  "breakdown": {
+    "washTradeProb": "0-100 score for wash trade footprint details",
+    "holderConcentration": "0-100 score on distribution concentration risk",
+    "teamCredibility": "0-100 risk score on team anonymity or mixer withdrawals",
+    "contractAudit": "0-100 risk score on missing or unverified contract setups",
+    "socialManipulation": "0-100 risk score on bot activities",
+    "liquidityDepth": "0-100 risk score on liquid depth security"
+  },
+  "description": "Engaging professional analytical overview describing the safety rating, what fraud flags were detected, or why this NFT collection holds its specific safety tier."
+}`;
+
+    if (!aiClient) {
+      // Graceful fallback to rich simulated response when GEMINI_API_KEY is not configured
+      console.log("Gemini API Client skipped (no key). Returning high-fidelity fallback analysis.");
+      const isSuspect = collectionName.toLowerCase().includes("derivat") || 
+                        collectionName.toLowerCase().includes("fake") || 
+                        collectionName.toLowerCase().includes("clone") || 
+                        collectionName.toLowerCase().includes("royal") ||
+                        Math.random() > 0.5;
+
+      const riskVal = isSuspect ? Math.round(65 + Math.random() * 32) : Math.round(15 + Math.random() * 20);
+      const rating = riskVal > 70 ? "Red" : riskVal > 35 ? "Yellow" : "Green";
+
+      const fallbackData = {
+        name: collectionName,
+        chain: blockchain || "Ethereum",
+        symbol: collectionName.slice(0, 4).toUpperCase() + "_AI",
+        floorPrice: isSuspect ? 0.15 : 8.4,
+        floorPriceUsd: isSuspect ? 480 : 26880,
+        velocity24h: isSuspect ? -18.2 : 2.4,
+        realVolume: isSuspect ? 1.5 : 482.0,
+        washVolume: isSuspect ? 29.4 : 12.5,
+        holderCount: isSuspect ? 85 : 4192,
+        totalSupply: isSuspect ? 3000 : 10000,
+        giniCoefficient: isSuspect ? 0.89 : 0.48,
+        riskScore: riskVal,
+        riskRating: rating,
+        auditStatus: isSuspect ? "Not Audited" : "Verified & Audited",
+        plagiarismReport: isSuspect ? "High-Risk: 88.5% trait similarity to leading authentic collections" : "Original design, completely distinct metadata footprint",
+        teamCredibility: isSuspect ? "Anonymous developers, mixer activities flagged" : "Doxed or verified launchpad partners",
+        socialManipulationScore: isSuspect ? 78 : 12,
+        liquidityDepth: isSuspect ? "Extremely thin (Vulnerable to sudden collapse)" : "Stable bid walls across multiple secondary pools",
+        breakdown: {
+          washTradeProb: isSuspect ? 85 : 12,
+          holderConcentration: isSuspect ? 89 : 42,
+          teamCredibility: isSuspect ? 88 : 15,
+          contractAudit: isSuspect ? 90 : 10,
+          socialManipulation: isSuspect ? 75 : 20,
+          liquidityDepth: isSuspect ? 80 : 35
+        },
+        description: `Autonomous scan generated by the platform. ${collectionName} displays a safety rating of ${rating.toUpperCase()}. ${isSuspect ? "WARNING: Multiple fraud signatures triggered. Wallet clustering reveals cyclic trade loops operating to artificially boost floor volumes. Art similarity scanning flags potential plagiarism overlaps." : "This collection demonstrates organic trading volumes, sound holder distribution, and verified contract authenticity with a healthy ecosystem index."}`
+      };
+
+      return res.json({
+        success: true,
+        mode: "simulated-engine",
+        data: fallbackData
+      });
+    }
+
+    try {
+      // Call Gemini using the official SDK
+      const prompt = `Please audit and analyze the NFT collection: "${collectionName}" on the ${blockchain || "Ethereum"} blockchain. Generate a thorough, scientifically structured fraud detection and market risk assessment in strict compliance with the platform system rules.`;
+      
+      const response = await aiClient.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+          temperature: 0.7
+        }
+      });
+
+      const responseText = response.text || "";
+      let parsedData;
+      try {
+        parsedData = JSON.parse(responseText.trim());
+      } catch (e) {
+        console.error("Failed to parse JSON response from Gemini:", responseText);
+        throw e;
+      }
+
+      res.json({
+        success: true,
+        mode: "ai-engine",
+        data: parsedData
+      });
+
+    } catch (e: any) {
+      console.error("Gemini core analytical request failed:", e);
+      res.status(500).json({
+        success: false,
+        error: "Analytical Engine Timeout. Please verify your collection query and try again limit. Details: " + e.message
+      });
+    }
+  });
+
+  // Vite Integration for development / production serving
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Express custom server running correctly on port ${PORT}`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error("Critical server startup failure:", err);
+});

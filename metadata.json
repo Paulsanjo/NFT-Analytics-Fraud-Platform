@@ -1,0 +1,6 @@
+{
+  "name": "NFT Analytics & Fraud Platform",
+  "description": "Real-time wash trading detection, art plagiarism scanning, holder concentration analysis, and risk ranking for NFT collections on Ethereum, Solana, and Polygon.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
