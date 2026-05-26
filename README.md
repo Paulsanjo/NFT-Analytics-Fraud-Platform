@@ -1,5 +1,5 @@
 <div align="center">
-
+Real-time wash trading detection, art plagiarism scanning, holder concentration analysis, and risk ranking for NFT collections on Ethereum, Solana, and Polygon.
 </div>
 
 # Run and deploy app
